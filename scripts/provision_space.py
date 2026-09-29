@@ -123,16 +123,22 @@ def main() -> int:
         return 1
 
     # ------------------------------------------------------ create repos
-    print(f"[1/5] Creating (or reusing) Space {repo_id} (sdk=docker, cpu-basic, {'private' if PRIVATE_SPACE else 'public'})…")
-    url = api.create_repo(
-        repo_id=repo_id,
-        repo_type="space",
-        sdk="docker",
-        private=PRIVATE_SPACE,
-        exist_ok=True,
-        space_hardware="cpu-basic",
-    )
-    print(f"      -> {url}")
+    print(f"[1/5] Creating (or reusing) Space {repo_id} (space_sdk=docker, cpu-basic, {'private' if PRIVATE_SPACE else 'public'})…")
+    try:
+        if not api.repo_exists(repo_id=repo_id, repo_type="space"):
+            url = api.create_repo(
+                repo_id=repo_id,
+                repo_type="space",
+                space_sdk="docker",
+                private=PRIVATE_SPACE,
+                exist_ok=True,
+                space_hardware="cpu-basic",
+            )
+            print(f"      -> {url}")
+        else:
+            print(f"      -> Space {repo_id} already exists, reusing.")
+    except Exception as e:
+        print(f"::warning:: Space create returned: {e}")
 
     print(f"[1/5] Creating (or reusing) private backup dataset {backup_repo}…")
     try:
@@ -148,8 +154,15 @@ def main() -> int:
         if not val:
             print(f"      - {key}: (skipped — empty)")
             continue
-        api.add_space_secret(repo_id=repo_id, key=key, value=val)
-        print(f"      - {key}: ✓ set")
+        try:
+            api.delete_space_variable(repo_id=repo_id, key=key)
+        except Exception:
+            pass
+        try:
+            api.add_space_secret(repo_id=repo_id, key=key, value=val)
+            print(f"      - {key}: ✓ set")
+        except Exception as e:
+            print(f"      - {key}: warning: {e}")
 
     print("[3/5] Injecting Space variables…")
     defaults = {
@@ -162,8 +175,15 @@ def main() -> int:
         if not val:
             print(f"      - {key}: (skipped — empty)")
             continue
-        api.add_space_variable(repo_id=repo_id, key=key, value=val)
-        print(f"      - {key}: {key in ('BACKUP_REPO',) and val or '✓ set'}")
+        try:
+            api.delete_space_secret(repo_id=repo_id, key=key)
+        except Exception:
+            pass
+        try:
+            api.add_space_variable(repo_id=repo_id, key=key, value=val)
+            print(f"      - {key}: {key in ('BACKUP_REPO',) and val or '✓ set'}")
+        except Exception as e:
+            print(f"      - {key}: warning: {e}")
 
     # -------------------------------------------------------- upload
     print("[4/5] Uploading space/ files (Dockerfile, Caddyfile, hfkit)…")
@@ -214,6 +234,19 @@ def main() -> int:
                 print(f"::error:: Logs: {space_url}/logs/build")
                 write_summary(f"## ❌ Space build failed\n\nState: `{stage}`\n\n[Build logs]({space_url}/logs/build)")
                 return 1
+            if stage == "PAUSED":
+                err = ""
+                if hasattr(rt, "raw") and isinstance(rt.raw, dict):
+                    err = rt.raw.get("errorMessage", "")
+                if "quota" in err.lower() or "limit=0" in err.lower():
+                    print(f"::error:: Space is PAUSED by Hugging Face: {err}")
+                    print("::error:: Hugging Face requires a PRO subscription or billing verification to run Docker Spaces.")
+                    write_summary(
+                        f"## ⚠️ Space is PAUSED by Hugging Face\n\n"
+                        f"**Error:** `{err}`\n\n"
+                        "Hugging Face now enforces PRO or payment method verification to run Docker Spaces.\n"
+                    )
+                    return 1
         except Exception as e:
             print(f"      (runtime poll failed: {e} — retrying)")
         time.sleep(30)
