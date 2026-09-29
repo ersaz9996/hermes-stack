@@ -76,8 +76,10 @@ jobs:
             hermes-live
 
           echo "Container started. Waiting for initialization..."
-          sleep 15
+          sleep 20
           docker ps
+          echo "=== Container Logs (first 80 lines) ==="
+          docker logs hermes-agent --tail 80 2>&1 || true
 
       - name: 🌐 Establish Cloudflare Tunnel
         id: tunnel
