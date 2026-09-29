@@ -11,8 +11,8 @@ export DATA_DIR=/opt/data/9router
 export NODE_ENV=production
 export NEXT_TELEMETRY_DISABLED=1
 
-# API key enforcement on /v1/* (you create the key in the dashboard)
-export REQUIRE_API_KEY="${REQUIRE_API_KEY:-true}"
+# API key enforcement disabled — Hermes gateway calls internally
+export REQUIRE_API_KEY="${REQUIRE_API_KEY:-false}"
 # HTTPS in front (HF edge) -> Secure auth cookie
 export AUTH_COOKIE_SECURE=true
 # first-login dashboard password (change via Secret ROUTER_INITIAL_PASSWORD)
