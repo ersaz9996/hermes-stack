@@ -51,7 +51,9 @@ RUN chmod +x /opt/hfkit-kit/*.sh /opt/hfkit-kit/cont-init.d/*.sh \
     && cp /opt/hfkit-kit/cont-init.d/*.sh /etc/cont-init.d/
 
 # Hermes state lives in /opt/data (official image contract)
-RUN mkdir -p /opt/data /opt/data/logs
+# s6-overlay runs the gateway as non-root 'hermes' user, so /opt/data must be writable.
+RUN mkdir -p /opt/data /opt/data/logs \
+    && chown -R hermes:hermes /opt/data || true
 
 # HF pings the app port; /healthz lets our own keep-alive Action verify
 # the full front proxy is alive without spamming the real services.
