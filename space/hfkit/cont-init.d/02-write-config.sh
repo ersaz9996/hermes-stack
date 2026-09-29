@@ -21,6 +21,7 @@ providers:
   # 9Router — free/paid models via dashboard (DEFAULT — keyless when REQUIRE_API_KEY=false)
   ninerouter:
     api: http://127.0.0.1:20128/v1
+    key_env: NINEROUTER_API_KEY
     transport: chat_completions
     discover_models: true
 
