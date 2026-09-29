@@ -1,0 +1,159 @@
+name: 🤖 Run Hermes Agent (Live 24/7)
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: "⏱️ Run duration in hours (max 5.5 for GitHub Actions job)"
+        type: string
+        default: "5"
+      auto_retrigger:
+        description: "🔄 Automatically chain the next run before timeout (24/7)"
+        type: boolean
+        default: true
+  schedule:
+    # Run every 5 hours to ensure zero downtime
+    - cron: '0 */5 * * *'
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: live-hermes-agent
+  cancel-in-progress: false
+
+jobs:
+  run-hermes:
+    name: ⚡ Hermes Agent Live Runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🏗️ Build Hermes Stack Image
+        run: |
+          echo "Building Hermes Agent image..."
+          docker build -t hermes-live space/
+
+      - name: 🚀 Start Hermes Container
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_USERS: ${{ secrets.TELEGRAM_ALLOWED_USERS }}
+          HERMES_API_KEY: ${{ secrets.HERMES_API_KEY }}
+          NINEROUTER_API_KEY: ${{ secrets.NINEROUTER_API_KEY }}
+          OMNI_ROUTER_KEY: ${{ secrets.OMNI_ROUTER_KEY }}
+          OMNI_ADMIN_PASSWORD: ${{ secrets.OMNI_ADMIN_PASSWORD }}
+          ROUTER_INITIAL_PASSWORD: ${{ secrets.ROUTER_INITIAL_PASSWORD }}
+          DASHBOARD_USERNAME: ${{ secrets.DASHBOARD_USERNAME }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          HERMES_MODEL: ${{ secrets.HERMES_MODEL }}
+          HERMES_TIMEZONE: ${{ secrets.HERMES_TIMEZONE }}
+          OMNI_ENABLED: ${{ secrets.OMNI_ENABLED }}
+          HERMES_WEB_BACKEND: ${{ secrets.HERMES_WEB_BACKEND }}
+        run: |
+          docker run -d \
+            --name hermes-agent \
+            -p 7860:7860 \
+            -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            -e TELEGRAM_ALLOWED_USERS="$TELEGRAM_ALLOWED_USERS" \
+            -e HERMES_API_KEY="$HERMES_API_KEY" \
+            -e NINEROUTER_API_KEY="$NINEROUTER_API_KEY" \
+            -e OMNI_ROUTER_KEY="$OMNI_ROUTER_KEY" \
+            -e OMNI_ADMIN_PASSWORD="$OMNI_ADMIN_PASSWORD" \
+            -e ROUTER_INITIAL_PASSWORD="$ROUTER_INITIAL_PASSWORD" \
+            -e DASHBOARD_USERNAME="$DASHBOARD_USERNAME" \
+            -e DASHBOARD_PASSWORD="$DASHBOARD_PASSWORD" \
+            -e HERMES_MODEL="${HERMES_MODEL:-gemini-2.5-flash}" \
+            -e HERMES_TIMEZONE="${HERMES_TIMEZONE:-Asia/Tehran}" \
+            -e OMNI_ENABLED="${OMNI_ENABLED:-true}" \
+            -e HERMES_WEB_BACKEND="${HERMES_WEB_BACKEND:-tavily}" \
+            hermes-live
+
+          echo "Container started. Waiting for initialization..."
+          sleep 15
+          docker ps
+
+      - name: 🌐 Establish Cloudflare Tunnel
+        id: tunnel
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+          
+          # Start tunnel in background
+          cloudflared tunnel --url http://127.0.0.1:7860 --no-autoupdate > /tmp/tunnel.log 2>&1 &
+          
+          # Wait and extract public URL
+          TUNNEL_URL=""
+          for i in {1..30}; do
+            sleep 2
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/tunnel.log | head -n 1 || true)
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+          done
+          
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          echo "public_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
+          echo "Public Dashboard Tunnel: $TUNNEL_URL"
+
+      - name: 📲 Notify Telegram Admin
+        env:
+          TG_BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ADMIN: ${{ secrets.TELEGRAM_ALLOWED_USERS }}
+          TUNNEL: ${{ env.TUNNEL_URL }}
+        run: |
+          if [ -n "$TG_BOT" ] && [ -n "$TG_ADMIN" ]; then
+            MSG="🛰️ *Hermes Agent is LIVE on GitHub Actions!*%0A%0A🤖 *Telegram Gateway:* Connected & Polling%0A🌐 *Web Dashboard:* ${TUNNEL}%0A⚡ *Platform:* GitHub Runner (Unrestricted Internet)%0A⏱️ *Status:* Running active"
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT}/sendMessage" \
+              -d "chat_id=${TG_ADMIN}&text=${MSG}&parse_mode=Markdown" || true
+          fi
+
+      - name: 📋 Publish Summary
+        run: |
+          cat <<EOF >> $GITHUB_STEP_SUMMARY
+          ## 🛰️ Hermes Agent is RUNNING LIVE!
+
+          | Service | URL |
+          |---|---|
+          | 🌐 Public Dashboard | ${{ env.TUNNEL_URL }} |
+          | 🧠 Agent UI | ${{ env.TUNNEL_URL }}/hermes/ |
+          | 🔌 OpenAI API | ${{ env.TUNNEL_URL }}/v1 |
+          | 🤖 Telegram Bot | Active on @${{ secrets.TELEGRAM_BOT_TOKEN != '' && 'Configured' || 'None' }} |
+          | ⚡ Internet | High-Speed 10Gbps Unrestricted |
+
+          ### 💬 How to chat
+          Open your Telegram bot and send \`/start\`!
+          EOF
+
+      - name: 🩺 Monitor & Health Loop
+        env:
+          DURATION: ${{ inputs.duration_hours }}
+        run: |
+          HOURS="${DURATION:-5}"
+          SECS=$(( HOURS * 3600 ))
+          echo "Monitoring Hermes for $SECS seconds ($HOURS hours)..."
+          START=$(date +%s)
+          while [ $(( $(date +%s) - START )) -lt $SECS ]; do
+            # Check if container is alive
+            if ! docker ps --filter "name=hermes-agent" --filter "status=running" | grep -q hermes-agent; then
+              echo "::error:: Container exited unexpectedly! Logs:"
+              docker logs hermes-agent --tail 100
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Scheduled monitoring duration completed."
+
+      - name: 🔄 Auto-Retrigger Next Run (24/7 Continuous)
+        if: ${{ github.event_name == 'schedule' || inputs.auto_retrigger != false }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Triggering next Hermes run to maintain 24/7 uptime..."
+          gh workflow run run-hermes-agent.yml --repo "${{ github.repository }}" || true
